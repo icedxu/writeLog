@@ -1,0 +1,10 @@
+TARGETNAME=writelog
+TARGETPATH=obj
+TARGETTYPE=DRIVER
+
+
+TARGETLIBS= $(TARGETLIBS) \
+             $(IFSKIT_LIB_PATH)\fltMgr.lib 
+
+SOURCES=stdafx.cpp \
+	writelog.cpp

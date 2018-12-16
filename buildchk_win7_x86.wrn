@@ -1,0 +1,5 @@
+1>warnings in directory e:\vs_project\papercode\writelog\writelog
+1>e:\vs_project\papercode\writelog\writelog\writelog.cpp(119) : warning C4996: 'ExAllocatePool': was declared deprecated
+1>e:\vs_project\papercode\writelog\writelog\writelog.cpp(127) : warning C4244: '=' : conversion from 'ULONG' to 'USHORT', possible loss of data
+1>e:\vs_project\papercode\writelog\writelog\writelog.cpp(207) : warning C4996: 'ExAllocatePool': was declared deprecated
+1>e:\vs_project\papercode\writelog\writelog\writelog.cpp(215) : warning C4244: '=' : conversion from 'ULONG' to 'USHORT', possible loss of data
