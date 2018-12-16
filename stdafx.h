@@ -17,6 +17,7 @@ extern "C"
 #endif
 
 #define LOG_MSG  'msg'
+#define PROCESS_FULLPATH 'name'
 #define MAX_VOLUME_CHARS  26
 #define MAX_PATH  260
 
@@ -53,12 +54,28 @@ NTSTATUS
   );
 
 
+VOID  StartThread();
 VOID  ZwThreadProc();
 VOID  FltThreadProc();
-VOID  StartThread();
-PCHAR GetCurrentProcessName(ULONG ProcessNameOffset);
-ULONG GetProcessNameOffset(VOID);
-VOID  CHAR_TO_UNICODE_STRING(PCHAR,PUNICODE_STRING);
+
+
+
+typedef NTSTATUS (*QUERY_INFO_PROCESS) (
+  __in HANDLE ProcessHandle,
+  __in PROCESSINFOCLASS ProcessInformationClass,
+  __out_bcount(ProcessInformationLength) PVOID ProcessInformation,
+  __in ULONG ProcessInformationLength,
+  __out_opt PULONG ReturnLength
+  );
+
+QUERY_INFO_PROCESS ZwQueryInformationProcess;
+
+NTSTATUS GetProcessImageName(HANDLE processId, PUNICODE_STRING ProcessImageName);
+
+
+
+
+
 PFLT_INSTANCE 
   XBFltGetVolumeInstance(
   IN PFLT_FILTER		pFilter,

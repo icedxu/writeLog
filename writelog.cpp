@@ -6,7 +6,6 @@ extern "C" NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRI
 #endif
 
 LIST_ENTRY logListHeader;
-KSPIN_LOCK HidePathListLock;
 //minifilter 句柄
 PFLT_FILTER gFilterHandle;
 KEVENT s_Event;
@@ -21,7 +20,6 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING  Registr
 {
   NTSTATUS status;
   KdPrint(("DriverEntry \n"));
-
   InitializeListHead(&logListHeader);
   //注册
   status=FltRegisterFilter(DriverObject,
@@ -35,11 +33,8 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING  Registr
     {
       FltUnregisterFilter(gFilterHandle);
     }
-
   } 
 
-  //获取进程名称偏移
-  ProcessNameOffset=GetProcessNameOffset();
 
    KeInitializeEvent(&s_Event,SynchronizationEvent,FALSE);
    StartThread();
@@ -52,13 +47,14 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING  Registr
 
 NTSTATUS FilterUnload(__in FLT_FILTER_UNLOAD_FLAGS Flags)
 {
-	FltUnregisterFilter(gFilterHandle);
-    FLAG = FALSE;
-    KdPrint(("卸载成功\n"));
-    return STATUS_SUCCESS;
+
+
+  FLAG = FALSE;
+
+  FltUnregisterFilter(gFilterHandle);
+  KdPrint(("卸载成功\n"));
+   return STATUS_SUCCESS;
 }
-
-
 
 
 FLT_PREOP_CALLBACK_STATUS
@@ -68,6 +64,7 @@ FLT_PREOP_CALLBACK_STATUS
   __deref_out_opt PVOID *CompletionContext
   )
 {
+ 
   NTSTATUS status;
   PFLT_FILE_NAME_INFORMATION nameInfo;
   UNICODE_STRING Directory_Of_Bait_files;
@@ -95,9 +92,8 @@ FLT_PREOP_CALLBACK_STATUS
       else
       {
         status = FltGetFileNameInformation( Data,
-          FLT_FILE_NAME_NORMALIZED |
-          FLT_FILE_NAME_QUERY_DEFAULT,
-          &nameInfo );
+                                            FLT_FILE_NAME_NORMALIZED |FLT_FILE_NAME_QUERY_DEFAULT,
+                                            &nameInfo );
         if (NT_SUCCESS( status )) 
         {
           FltParseFileNameInformation( nameInfo );
@@ -105,16 +101,32 @@ FLT_PREOP_CALLBACK_STATUS
           if (RtlPrefixUnicodeString(&Directory_Of_Bait_files,&nameInfo->Name,TRUE))
           {
             //进入了我想要监控的目录
-            PCHAR procName=GetCurrentProcessName(ProcessNameOffset);
-            UNICODE_STRING unicodeBuffer;
-            RtlInitUnicodeString(&unicodeBuffer,L"");
-            CHAR_TO_UNICODE_STRING(procName,&unicodeBuffer); //将进程名转为UNICODE_STRING
+            PEPROCESS obProcess = NULL;
+            HANDLE hProcess;
+            UNICODE_STRING fullPath;
+            obProcess = IoThreadToProcess(Data->Thread);
+            hProcess = PsGetProcessId(obProcess);
+
+            fullPath.Length = 0;
+            fullPath.MaximumLength = 520;
+
+            fullPath.Buffer = (PWSTR)ExAllocatePoolWithTag(NonPagedPool,520,PROCESS_FULLPATH);
+            if (fullPath.Buffer == NULL)
+            {
+              FltReleaseFileNameInformation( nameInfo ); 
+              return FLT_PREOP_SUCCESS_NO_CALLBACK;
+            }
+            status = GetProcessImageName(hProcess,&fullPath);
+            if (!NT_SUCCESS(status))
+            {
+              FltReleaseFileNameInformation( nameInfo ); 
+              return FLT_PREOP_SUCCESS_NO_CALLBACK;
+            }
 
             UNICODE_STRING  tmpTail;
             RtlInitUnicodeString( &tmpTail, L";\r\n"); //用来结尾
 
-            ULONG len = unicodeBuffer.MaximumLength + nameInfo->Name.MaximumLength + tmpTail.MaximumLength;
-
+            ULONG len = fullPath.MaximumLength + nameInfo->Name.MaximumLength + tmpTail.MaximumLength;
             PLOG_LIST logListNode;
             logListNode = (PLOG_LIST)ExAllocatePool(NonPagedPool,sizeof(LOG_LIST));
             if (logListNode == NULL)
@@ -126,12 +138,14 @@ FLT_PREOP_CALLBACK_STATUS
             logListNode->msg.Length = 0;
             logListNode->msg.MaximumLength = len;
 
-            RtlAppendUnicodeStringToString(&logListNode->msg,&unicodeBuffer);
+            RtlAppendUnicodeStringToString(&logListNode->msg,&fullPath);
+            ExFreePoolWithTag(fullPath.Buffer,PROCESS_FULLPATH);  //在将进程全路径赋值给要保存的消息后将内存释放
+
             RtlAppendUnicodeToString(&logListNode->msg,L";");
             RtlAppendUnicodeStringToString(&logListNode->msg,&nameInfo->Name);
             RtlAppendUnicodeStringToString(&logListNode->msg,&tmpTail);
 
-          //  KdPrint(("&logListNode->msg = %wZ\n",&logListNode->msg));
+            //KdPrint(("&logListNode->msg = %wZ\n",&logListNode->msg));
             InsertTailList(&logListHeader,&logListNode->listNode);//插入队尾
             KeSetEvent(&s_Event,IO_NO_INCREMENT,FALSE);
           }
@@ -192,36 +206,53 @@ FLT_PREOP_CALLBACK_STATUS
           if (RtlPrefixUnicodeString(&Directory_Of_Bait_files,&nameInfo->Name,TRUE))
           {
                 //进入了我想要监控的目录
-                PCHAR procName=GetCurrentProcessName(ProcessNameOffset);
-                UNICODE_STRING unicodeBuffer;
-                RtlInitUnicodeString(&unicodeBuffer,L"");
-                CHAR_TO_UNICODE_STRING(procName,&unicodeBuffer); //将进程名转为UNICODE_STRING
+            PEPROCESS obProcess = NULL;
+            HANDLE hProcess;
+            UNICODE_STRING fullPath;
+            obProcess = IoThreadToProcess(Data->Thread);
+            hProcess = PsGetProcessId(obProcess);
 
-                UNICODE_STRING  tmpTail;
-                RtlInitUnicodeString( &tmpTail, L";\r\n"); //用来结尾
+            fullPath.Length = 0;
+            fullPath.MaximumLength = 520;
 
-                ULONG len = unicodeBuffer.MaximumLength + nameInfo->Name.MaximumLength + tmpTail.MaximumLength;
+            fullPath.Buffer = (PWSTR)ExAllocatePoolWithTag(NonPagedPool,520,PROCESS_FULLPATH);
+            if (fullPath.Buffer == NULL)
+            {
+                FltReleaseFileNameInformation( nameInfo ); 
+                return FLT_PREOP_SUCCESS_NO_CALLBACK;
+            }
+            status = GetProcessImageName(hProcess,&fullPath);
+            if (!NT_SUCCESS(status))
+            {
+              FltReleaseFileNameInformation( nameInfo ); 
+              return FLT_PREOP_SUCCESS_NO_CALLBACK;
+            }
 
+            UNICODE_STRING  tmpTail;
+            RtlInitUnicodeString( &tmpTail, L";\r\n"); //用来结尾
 
-                PLOG_LIST logListNode;
-                logListNode = (PLOG_LIST)ExAllocatePool(NonPagedPool,sizeof(LOG_LIST));
-                if (logListNode == NULL)
-                {
+            ULONG len = fullPath.MaximumLength + nameInfo->Name.MaximumLength + tmpTail.MaximumLength;
+            PLOG_LIST logListNode;
+            logListNode = (PLOG_LIST)ExAllocatePool(NonPagedPool,sizeof(LOG_LIST));
+            if (logListNode == NULL)
+            {
                   KdPrint(("队列申请失败  \n"));  
-                }
+            }
 
-                logListNode->msg.Buffer = (PWCHAR)ExAllocatePoolWithTag(NonPagedPool, len, LOG_MSG);
-                logListNode->msg.Length = 0;
-                logListNode->msg.MaximumLength = len;
+            logListNode->msg.Buffer = (PWCHAR)ExAllocatePoolWithTag(NonPagedPool, len, LOG_MSG);
+            logListNode->msg.Length = 0;
+            logListNode->msg.MaximumLength = len;
 
-                RtlAppendUnicodeStringToString(&logListNode->msg,&unicodeBuffer);
-                RtlAppendUnicodeToString(&logListNode->msg,L";");
-                RtlAppendUnicodeStringToString(&logListNode->msg,&nameInfo->Name);
-                RtlAppendUnicodeStringToString(&logListNode->msg,&tmpTail);
+            RtlAppendUnicodeStringToString(&logListNode->msg,&fullPath);
+            ExFreePoolWithTag(fullPath.Buffer,PROCESS_FULLPATH);  //在将进程全路径赋值给要保存的消息后将内存释放
 
-                KdPrint(("&logListNode->msg = %wZ\n",&logListNode->msg));
-                InsertTailList(&logListHeader,&logListNode->listNode);//插入队尾
-                KeSetEvent(&s_Event,IO_NO_INCREMENT,FALSE);
+            RtlAppendUnicodeToString(&logListNode->msg,L";");
+            RtlAppendUnicodeStringToString(&logListNode->msg,&nameInfo->Name);
+            RtlAppendUnicodeStringToString(&logListNode->msg,&tmpTail);
+
+            //KdPrint(("&logListNode->msg = %wZ\n",&logListNode->msg));
+            InsertTailList(&logListHeader,&logListNode->listNode);//插入队尾
+            KeSetEvent(&s_Event,IO_NO_INCREMENT,FALSE);
           }
           FltReleaseFileNameInformation( nameInfo ); 
         }
@@ -520,98 +551,92 @@ PFLT_INSTANCE
 }
 
 
-
-
-
-
-
- //获取进程名
-PCHAR
-GetCurrentProcessName(ULONG ProcessNameOffset)
+NTSTATUS GetProcessImageName(HANDLE processId, PUNICODE_STRING ProcessImageName)
 {
-    PEPROCESS       curproc;
-    char            *nameptr;
-    ULONG           i;
- 
-    //
-    // We only try and get the name if we located the name offset
-    //
-    if( ProcessNameOffset ) {
-    
-        //
-        // Get a pointer to the current process block
-        //
-        curproc = PsGetCurrentProcess();
- 
-        //
-        // Dig into it to extract the name. Make sure to leave enough room
-        // in the buffer for the appended process ID.
-        //
-        nameptr   = (PCHAR) curproc + ProcessNameOffset;
-		/*
-		#if defined(_M_IA64)
-        sprintf( szName + strlen(szName), ":%I64d", PsGetCurrentProcessId());
-		#else
-        sprintf( szName + strlen(szName), ":%d", (ULONG) PsGetCurrentProcessId());
-		#endif
-		//*/
- 
-    } else {
-		
-       nameptr="";
-    }
-    return nameptr;
-}
+NTSTATUS status;
+ULONG returnedLength;
+ULONG bufferLength;
+HANDLE hProcess;
+PVOID buffer;
+PEPROCESS eProcess;
+PUNICODE_STRING imageName;
 
+PAGED_CODE(); // this eliminates the possibility of the IDLE Thread/Process
 
+status = PsLookupProcessByProcessId(processId, &eProcess);
 
-/************************************************************************/
-/*    获取进程名称偏移                                                 */
-/************************************************************************/
-//////////////////////////////////////////////////////////////////////////
-//获取进程名称
-
-
-ULONG 
-  GetProcessNameOffset(
-  VOID
-  )
+if(NT_SUCCESS(status))
 {
-  PEPROCESS       curproc;
-  ULONG             i;
-
-  curproc = PsGetCurrentProcess();
-
-  //
-  // Scan for 12KB, hopping the KPEB never grows that big!
-  //
-  for( i = 0; i < 3*PAGE_SIZE; i++ ) 
-  {
-
-    if( !strncmp( "System", (PCHAR) curproc + i, strlen("System") )) 
+    status = ObOpenObjectByPointer(eProcess,0, NULL, 0,0,KernelMode,&hProcess);
+    if(NT_SUCCESS(status))
     {
-
-      return i;
+    } else {
+        DbgPrint("ObOpenObjectByPointer Failed: %08x\n", status);
     }
-  }
-  //
-  // Name not found - oh, well
-  //
-  return 0;
+    ObDereferenceObject(eProcess);
+} else {
+    DbgPrint("PsLookupProcessByProcessId Failed: %08x\n", status);
 }
 
 
-VOID CHAR_TO_UNICODE_STRING(PCHAR ch,PUNICODE_STRING unicodeBuffer)
+if (NULL == ZwQueryInformationProcess) {
+
+    UNICODE_STRING routineName;
+
+    RtlInitUnicodeString(&routineName, L"ZwQueryInformationProcess");
+
+    ZwQueryInformationProcess =
+           (QUERY_INFO_PROCESS) MmGetSystemRoutineAddress(&routineName);
+
+    if (NULL == ZwQueryInformationProcess) {
+        DbgPrint("Cannot resolve ZwQueryInformationProcess\n");
+    }
+}
+
+/* Query the actual size of the process path */
+status = ZwQueryInformationProcess( hProcess,
+                                    ProcessImageFileName,
+                                    NULL, // buffer
+                                    0, // buffer size
+                                    &returnedLength);
+
+if (STATUS_INFO_LENGTH_MISMATCH != status) {
+    return status;
+}
+
+/* Check there is enough space to store the actual process
+   path when it is found. If not return an error with the
+   required size */
+bufferLength = returnedLength - sizeof(UNICODE_STRING);
+if (ProcessImageName->MaximumLength < bufferLength)
 {
-    ANSI_STRING ansiBuffer;
-    UNICODE_STRING buffer_proc;
-    ULONG len = strlen(ch);
-    KdPrint(("len = %ld\n",len));
-    ansiBuffer.Buffer = ch;
-    ansiBuffer.Length = ansiBuffer.MaximumLength = (USHORT)len;
-    RtlAnsiStringToUnicodeString(unicodeBuffer,&ansiBuffer,TRUE);
+    ProcessImageName->MaximumLength = (USHORT) bufferLength;
+    return STATUS_BUFFER_OVERFLOW;   
+}
 
-   // DbgPrint("ansiBuffer = %Z\n",&ansiBuffer);  
-    //DbgPrint("unicodeBuffer = %wZ\n",unicodeBuffer); 
+/* Allocate a temporary buffer to store the path name */
+buffer = ExAllocatePoolWithTag(NonPagedPool, returnedLength, 'uLT1');
 
+if (NULL == buffer) 
+{
+    return STATUS_INSUFFICIENT_RESOURCES;   
+}
+
+/* Retrieve the process path from the handle to the process */
+status = ZwQueryInformationProcess( hProcess,
+                                    ProcessImageFileName,
+                                    buffer,
+                                    returnedLength,
+                                    &returnedLength);
+
+if (NT_SUCCESS(status)) 
+{
+    /* Copy the path name */
+    imageName = (PUNICODE_STRING) buffer;
+    RtlCopyUnicodeString(ProcessImageName, imageName);
+}
+
+/* Free the temp buffer which stored the path */
+ExFreePoolWithTag(buffer, 'uLT1');
+return status;
 }
